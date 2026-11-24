@@ -118,4 +118,102 @@ public class TestCoreXMLTypes
         assertEquals("Should deserialize to equal Duration ('"+exp+"')", dur,
                 new ObjectMapper().readValue(quote(exp), Duration.class));
     }
+
+    /*
+    /**********************************************************
+    /* [databind#6127]: value length limit
+    /**********************************************************
+     */
+
+    public void testDurationLengthLimit() throws Exception
+    {
+        ObjectMapper mapper = new ObjectMapper();
+
+        // A Duration exactly at the limit is still accepted
+        String maxDuration = "P" + _repeat('9', CoreXMLDeserializers.MAX_VALUE_LENGTH - 2) + "Y";
+        assertNotNull(mapper.readValue(quote(maxDuration), Duration.class));
+
+        // One character over the limit is rejected (FromStringDeserializer reports
+        // the IllegalArgumentException as a generic "not a valid textual representation")
+        String bigDuration = "P" + _repeat('9', CoreXMLDeserializers.MAX_VALUE_LENGTH - 1) + "Y";
+        try {
+            mapper.readValue(quote(bigDuration), Duration.class);
+            fail("Should not pass: expected JsonMappingException for oversized Duration");
+        } catch (JsonMappingException e) {
+            verifyException(e, "not a valid textual representation");
+        }
+
+        // and so is a DoS-sized payload, without spending quadratic time on it
+        String hugeDuration = "P" + _repeat('9', 200000) + "Y";
+        try {
+            mapper.readValue(quote(hugeDuration), Duration.class);
+            fail("Should not pass: expected JsonMappingException for oversized Duration");
+        } catch (JsonMappingException e) {
+            verifyException(e, "not a valid textual representation");
+        }
+
+        // fractional seconds are parsed into a BigDecimal: same limit applies
+        String bigSeconds = "PT0." + _repeat('9', CoreXMLDeserializers.MAX_VALUE_LENGTH) + "S";
+        try {
+            mapper.readValue(quote(bigSeconds), Duration.class);
+            fail("Should not pass: expected JsonMappingException for oversized Duration");
+        } catch (JsonMappingException e) {
+            verifyException(e, "not a valid textual representation");
+        }
+
+        // A normal-length Duration should still work
+        Duration dur = mapper.readValue(quote("P1Y2M3D"), Duration.class);
+        assertEquals(1, dur.getYears());
+        assertEquals(2, dur.getMonths());
+        assertEquals(3, dur.getDays());
+    }
+
+    public void testXMLGregorianCalendarLengthLimit() throws Exception
+    {
+        ObjectMapper mapper = new ObjectMapper();
+
+        // Time-only value with oversized fractional seconds
+        String bigTime = "00:00:00." + _repeat('9', CoreXMLDeserializers.MAX_VALUE_LENGTH);
+        try {
+            mapper.readValue(quote(bigTime), XMLGregorianCalendar.class);
+            fail("Should not pass: expected JsonMappingException for oversized XMLGregorianCalendar");
+        } catch (JsonMappingException e) {
+            verifyException(e, "exceeds the maximum allowed");
+        }
+
+        // ISO-8601 date-time with an oversized year: the check fires before
+        // date parsing is reached
+        String bigDateTime = _repeat('9', CoreXMLDeserializers.MAX_VALUE_LENGTH) + "-01-01T00:00:00";
+        try {
+            mapper.readValue(quote(bigDateTime), XMLGregorianCalendar.class);
+            fail("Should not pass: expected JsonMappingException for oversized date-time value");
+        } catch (JsonMappingException e) {
+            verifyException(e, "exceeds the maximum allowed");
+        }
+
+        // A normal-length XMLGregorianCalendar should still work
+        XMLGregorianCalendar cal = mapper.readValue(quote("2023-01-01T12:00:00.000Z"),
+                XMLGregorianCalendar.class);
+        assertEquals(2023, cal.getYear());
+        assertEquals(1, cal.getMonth());
+        assertEquals(1, cal.getDay());
+        // as should a numeric timestamp, which is not subject to the length check
+        assertNotNull(mapper.readValue("0", XMLGregorianCalendar.class));
+    }
+
+    // QName has no numeric components, so the length limit must not apply to it
+    public void testQNameNotLengthLimited() throws Exception
+    {
+        String localPart = _repeat('a', CoreXMLDeserializers.MAX_VALUE_LENGTH + 100);
+        QName qn = new ObjectMapper().readValue(quote(localPart), QName.class);
+        assertEquals(localPart, qn.getLocalPart());
+    }
+
+    private static String _repeat(char c, int count) {
+        StringBuilder sb = new StringBuilder(count);
+        for (int i = 0; i < count; ++i) {
+            sb.append(c);
+        }
+        return sb.toString();
+    }
 }
